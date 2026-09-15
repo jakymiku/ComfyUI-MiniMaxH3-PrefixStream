@@ -70,6 +70,8 @@ Target empty AV latent ───────────────┼──►
 
 | Node Name | Category | Description |
 | :--- | :--- | :--- |
+| **`MiniMax Video Chunk Slicer`** | `MiniMaxH3/VideoEdit` | 🎬 Long video chunk slicer (zero-RAM lazy decoding): on-demand extraction of video chunks with auto grid / custom range, **featuring direct outputs for previous chunk's last frame (image ref) and tail sequence (video ref)** with auto-propagation of edited frames. |
+| **`MiniMax Video Patch Reassembler`** | `MiniMaxH3/VideoEdit` | 🧩 Long video patch reassembler: in-place replacement of edited chunks into master timeline with cosine micro-seam blending, coverage tracking, and 1-click full MP4 export. |
 | **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | Selects default `Native Masked AV` or fallback `Safe Native`, and sets the user-visible video context length. |
 | **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | Builds native video/audio masks and outputs `masked_latent`; applies collision-safe keyframe conditioning in fallback mode. |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | Trims leading overlap frames in pixel and audio waveform space, avoiding VAE causal flicker while retaining sync. |
@@ -94,7 +96,7 @@ cd ComfyUI-MiniMaxH3-PrefixStream
 pip install -r requirements.txt
 ```
 
-Restart ComfyUI. The nodes appear under `MiniMaxH3/PrefixStream`.
+Restart ComfyUI. The nodes appear under `MiniMaxH3/PrefixStream` and `MiniMaxH3/VideoEdit`.
 
 ---
 
@@ -110,7 +112,9 @@ python -m unittest discover -s tests -v
 
 ## Example Workflow and Documentation
 
-- 📄 **Ready-to-use workflow**: [`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
+- 📄 **Long Video Slicer & Reassembler Template**: [`examples/MiniMaxH3_LongVideo_Slicer_Reassembler_Template.json`](examples/MiniMaxH3_LongVideo_Slicer_Reassembler_Template.json)
+  - Dedicated workflow for long video repainting, editing, and chained generation with previous chunk reference connections.
+- 📄 **Ready-to-use PrefixStream workflow**: [`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
   - Drag this complete 42-node JSON directly onto a ComfyUI canvas to run PrefixStream long-video generation.
 - 📖 **Detailed Chinese user guide**: [`docs/USER_GUIDE_CN.md`](docs/USER_GUIDE_CN.md)
   - Includes hardware guidance, parameter tuning, multi-clip infinite-continuation walkthroughs, and FAQs.

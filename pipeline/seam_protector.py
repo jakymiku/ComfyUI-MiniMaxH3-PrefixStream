@@ -150,13 +150,24 @@ def _standardize_image_tensor(images: Optional[torch.Tensor]) -> Optional[torch.
 
 
 def _standardize_audio_dict(audio: Any, default_sr: int = 32000) -> Optional[Dict[str, Any]]:
-    """Safely normalizes AUDIO input to standard ComfyUI dict {'waveform': Tensor, 'sample_rate': int}.
+    """Safely normalizes AUDIO input to standard ComfyUI dict {'waveform': Tensor [1, C, N], 'sample_rate': int}.
     
-    Prevents crash when upstream node outputs bare Tensor or tuple/list instead of dictionary.
+    Prevents crash when upstream node outputs bare Tensor or tuple/list instead of dictionary,
+    and strictly guarantees waveform has 3 dimensions [batch=1, channels, samples].
     """
     if audio is None:
         return None
     if isinstance(audio, dict) and "waveform" in audio:
+        waveform = audio["waveform"]
+        sr = int(audio.get("sample_rate", default_sr))
+        if isinstance(waveform, torch.Tensor):
+            if waveform.ndim == 1:
+                waveform = waveform.unsqueeze(0).unsqueeze(0)
+            elif waveform.ndim == 2:
+                waveform = waveform.unsqueeze(0)
+            elif waveform.ndim > 3:
+                waveform = waveform.view(1, waveform.shape[-2], waveform.shape[-1])
+            return {"waveform": waveform, "sample_rate": sr}
         return audio
     if isinstance(audio, torch.Tensor):
         t = audio
@@ -164,6 +175,8 @@ def _standardize_audio_dict(audio: Any, default_sr: int = 32000) -> Optional[Dic
             t = t.unsqueeze(0).unsqueeze(0)
         elif t.ndim == 2:
             t = t.unsqueeze(0)
+        elif t.ndim > 3:
+            t = t.view(1, t.shape[-2], t.shape[-1])
         return {"waveform": t, "sample_rate": default_sr}
     if isinstance(audio, (list, tuple)) and len(audio) > 0:
         return _standardize_audio_dict(audio[0], default_sr=default_sr)

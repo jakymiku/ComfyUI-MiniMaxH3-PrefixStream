@@ -16,6 +16,8 @@ try:
         MiniMaxClipBinTreePickerNode,
         MiniMaxSafeVAEDecodeNode,
         MiniMaxSafeVAEDecodeAudioNode,
+        MiniMaxVideoChunkSlicerNode,
+        MiniMaxVideoPatchReassemblerNode,
         NODE_CLASS_MAPPINGS,
         NODE_DISPLAY_NAME_MAPPINGS,
     )
@@ -33,6 +35,8 @@ except (ImportError, ValueError):
         MiniMaxClipBinTreePickerNode,
         MiniMaxSafeVAEDecodeNode,
         MiniMaxSafeVAEDecodeAudioNode,
+        MiniMaxVideoChunkSlicerNode,
+        MiniMaxVideoPatchReassemblerNode,
         NODE_CLASS_MAPPINGS,
         NODE_DISPLAY_NAME_MAPPINGS,
     )
@@ -61,6 +65,8 @@ __all__ = [
     "MiniMaxClipBinTreePickerNode",
     "MiniMaxSafeVAEDecodeNode",
     "MiniMaxSafeVAEDecodeAudioNode",
+    "MiniMaxVideoChunkSlicerNode",
+    "MiniMaxVideoPatchReassemblerNode",
     "NODE_CLASS_MAPPINGS",
     "NODE_DISPLAY_NAME_MAPPINGS",
     "WEB_DIRECTORY",

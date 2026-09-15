@@ -182,6 +182,29 @@ MiniMax H3 在 ComfyUI 中使用联合 AV `LATENT` 封装视频和音频。续�
    - 感谢其在 Native Masked AV、精确音视频上下文边界和独立音频保护方面提供的思路。
 
 
+### 7. `MiniMax Video Chunk Slicer` (长视频智能切片工作台)
+
+专门用于长视频（>15秒，甚至数分钟长片）的分段重绘、修图与接力编辑。具备 **按需懒加载流式切片**（零显存/内存爆炸），并提供 **跨片段画面连续性参考输出**：
+
+| 输出端口 | 类型 | 用途说明 |
+| :--- | :--- | :--- |
+| `chunk_images` | `IMAGE` | 当前切片的待编辑画面序列（形状 `[B, H, W, 3]`）。 |
+| `chunk_audio` | `AUDIO` | 与当前切片严格样本级时间对齐的音频波形。 |
+| `slice_context` | `SLICE_CONTEXT` | 传递给下游 `MiniMaxVideoPatchReassembler` 的时序缝合上下文。 |
+| `video_info` | `VHS_VIDEOINFO` | 与 VideoHelperSuite 兼容的视频规格字典。 |
+| `timeline_preview` | `IMAGE` | 可直接接 `PreviewImage` 的时间轴进度条卡片。 |
+| `prev_last_frame` | `IMAGE` | **[新增] 上一片段最后一帧（图片参考）**：单帧图像 `[1, H, W, 3]`。专门连当下游图生视频（I2V）或风格迁移模型的首帧/图片参考端口。系统会自动优先获取上一段**已编辑后的最终成果**！首段运行时自动平稳回退当前片段第 0 帧。 |
+| `prev_ref_frames` | `IMAGE` | **[新增] 上一片段尾部多帧序列（视频参考）**：多帧序列 `[N, H, W, 3]`（$N$ 由参数 `prev_ref_frames_count` 设定）。用于视频动作延续、PrefixStream 前缀接力或多帧条件约束。 |
+
+**核心参数设置：**
+- `prev_ref_frames_count`：输出多帧参考序列时的帧数（默认 `16`）。
+- `first_chunk_ref_mode`：首段没有前序片段时的回退策略：
+  - `Current Chunk First Frame (当前片段首帧)`（推荐）：自动取当前片段首帧，确保首段也能平滑执行图生视频链路而无需手动切换分支。
+  - `Black / Zero Frame (全黑空帧)`：输出全黑静止帧。
+- `optional_first_frame_ref`（可选输入）：若需要在首段指定外部自定义首帧（如特定的立绘图或参考原画），可连接此端口。
+
+---
+
 ## 磁盘分段长视频（低内存）
 
 新增 `MiniMax H3 Disk Video Stream` 节点，依赖 PATH 中的 FFmpeg。

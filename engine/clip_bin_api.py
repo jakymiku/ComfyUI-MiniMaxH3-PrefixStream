@@ -27,6 +27,12 @@ from .clip_bin_manager import (
     VIDEO_EXTENSIONS,
     resolve_source_video_path,
 )
+from .timeline_session_manager import (
+    get_or_create_timeline_session,
+    resolve_video_path,
+    probe_video_info,
+    export_master_to_video_file,
+)
 
 @project_locked
 def get_project_clips_api(project_name: str) -> Dict[str, Any]:
@@ -228,4 +234,89 @@ def register_clip_bin_routes() -> None:
             logger.exception("[Clip Bin API] Request failed")
             return web.json_response({"success": False, "error": "Storage operation failed; see server log"}, status=500)
 
-    logger.info("[Clip Bin API] Successfully registered /minimax/clip_bin routes with PromptServer.")
+    @routes.get("/minimax/timeline/state")
+    async def handle_get_timeline_state(request):
+        project = request.rel_url.query.get("project", "Video_Edit_Project")
+        session = await asyncio.to_thread(get_or_create_timeline_session, project)
+        return web.json_response({
+            "success": True,
+            "project_name": session.project_name,
+            "meta": session.meta,
+        })
+
+    @routes.post("/minimax/timeline/reset_chunk")
+    async def handle_reset_timeline_chunk(request):
+        try:
+            body = await request.json()
+            project = body.get("project", "Video_Edit_Project")
+            chunk_index = int(body.get("chunk_index", 0))
+            session = await asyncio.to_thread(get_or_create_timeline_session, project)
+            success = await asyncio.to_thread(session.reset_chunk, chunk_index)
+            return web.json_response({"success": success, "meta": session.meta})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
+
+    @routes.post("/minimax/timeline/reset_project")
+    async def handle_reset_timeline_project(request):
+        try:
+            body = await request.json()
+            project = body.get("project", "Video_Edit_Project")
+            session = await asyncio.to_thread(get_or_create_timeline_session, project)
+            await asyncio.to_thread(session.reset_project)
+            return web.json_response({"success": True, "meta": session.meta})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
+
+    @routes.post("/minimax/timeline/export_video")
+    async def handle_export_timeline_video(request):
+        try:
+            body = await request.json()
+            project = body.get("project", "Video_Edit_Project")
+            crf = int(body.get("crf", 18))
+            preset = body.get("preset", "fast")
+            res = await asyncio.to_thread(export_master_to_video_file, project_name=project, crf=crf, preset=preset)
+            return web.json_response(res)
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=400)
+
+    @routes.get("/minimax/timeline/probe_video")
+    async def handle_probe_video(request):
+        video_name = request.rel_url.query.get("video", "").strip()
+        project = request.rel_url.query.get("project", "Video_Edit_Project").strip()
+        force_fps = float(request.rel_url.query.get("force_fps", 24.0))
+        chunk_len = int(request.rel_url.query.get("chunk_length", 124))
+        target_w = int(request.rel_url.query.get("target_width", 0))
+        target_h = int(request.rel_url.query.get("target_height", 0))
+
+        resolved_path = await asyncio.to_thread(resolve_video_path, video_name)
+        if not resolved_path or not os.path.isfile(resolved_path):
+            return web.json_response({"success": False, "error": f"Video not found: {video_name}"}, status=404)
+
+        session = await asyncio.to_thread(get_or_create_timeline_session, project)
+        await asyncio.to_thread(
+            session.initialize_from_video_file,
+            resolved_path,
+            force_fps,
+            chunk_len,
+            target_w,
+            target_h,
+        )
+
+        from urllib.parse import quote
+        video_url = f"/minimax/timeline/video_stream?file={quote(resolved_path)}"
+
+        return web.json_response({
+            "success": True,
+            "video_path": resolved_path,
+            "video_url": video_url,
+            "meta": session.meta,
+        })
+
+    @routes.get("/minimax/timeline/video_stream")
+    async def handle_video_stream(request):
+        file_path = request.rel_url.query.get("file", "").strip()
+        if not file_path or not os.path.isfile(file_path):
+            return web.Response(status=404, text="Video file not found")
+        return web.FileResponse(file_path)
+
+    logger.info("[Clip Bin & Timeline API] Successfully registered routes with PromptServer.")

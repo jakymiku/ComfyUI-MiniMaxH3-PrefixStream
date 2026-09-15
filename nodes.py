@@ -64,6 +64,14 @@ try:
         pil_to_tensor,
         create_placeholder_card,
     )
+    from .engine.timeline_session_manager import (
+        get_or_create_timeline_session,
+        slice_video_and_audio,
+        render_timeline_indicator_image,
+        get_input_video_files,
+        resolve_video_path,
+        standardize_audio_dict,
+    )
 except (ImportError, ValueError):
     from engine.cache_manager import (
         KVCacheConfig,
@@ -100,6 +108,14 @@ except (ImportError, ValueError):
         format_clip_label,
         pil_to_tensor,
         create_placeholder_card,
+    )
+    from engine.timeline_session_manager import (
+        get_or_create_timeline_session,
+        slice_video_and_audio,
+        render_timeline_indicator_image,
+        get_input_video_files,
+        resolve_video_path,
+        standardize_audio_dict,
     )
 
 
@@ -1289,6 +1305,286 @@ class MiniMaxSafeVAEDecodeAudioNode:
             raise RuntimeError(f"Audio VAE decode failed for shape {getattr(a, 'shape', None)}") from e
 
 
+class MiniMaxVideoChunkSlicerNode:
+    """Intelligent frame & audio slicer for long video editing (>15s).
+
+    Supports:
+    1. Direct on-demand video file streaming (Lazy Chunk Decoding) - Zero RAM/VRAM explosion!
+    2. Optional connected images Tensor (100% backward compatible).
+    3. Built-in target resolution scaling and force_fps locking.
+    4. Emits slice_context so downstream reassembler seamlessly replaces original frames.
+    """
+    @classmethod
+    def INPUT_TYPES(cls):
+        video_files = get_input_video_files()
+        return {
+            "required": {
+                "video_file": (video_files,),
+                "project_name": ("STRING", {"default": "Video_Edit_Project"}),
+                "chunk_length": ("INT", {"default": 124, "min": 16, "max": 2048, "step": 1}),
+                "chunk_index": ("INT", {"default": 0, "min": 0, "max": 9999, "step": 1}),
+                "target_width": ("INT", {"default": 0, "min": 0, "max": 7680, "step": 8}),
+                "target_height": ("INT", {"default": 0, "min": 0, "max": 4320, "step": 8}),
+                "force_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 0.01}),
+                "slice_mode": ([
+                    "Auto Chunk Grid (网格切分)",
+                    "Custom Range (自由区间)",
+                    "Next Unedited (自动下一未编辑段)",
+                ],),
+                "custom_start_frame": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
+                "custom_end_frame": ("INT", {"default": 124, "min": 1, "max": 999999, "step": 1}),
+                "auto_advance": ([
+                    "None (手动控制)",
+                    "Next Chunk (顺序下一段)",
+                    "Next Unedited (跳至下一未编辑)",
+                ], {"default": "None (手动控制)"}),
+                "prev_ref_frames_count": ("INT", {"default": 16, "min": 1, "max": 128, "step": 1}),
+                "first_chunk_ref_mode": ([
+                    "Current Chunk First Frame (当前片段首帧)",
+                    "Black / Zero Frame (全黑空帧)",
+                ], {"default": "Current Chunk First Frame (当前片段首帧)"}),
+            },
+            "optional": {
+                "images": ("IMAGE",),
+                "audio": ("AUDIO",),
+                "fps": ("FLOAT", {"forceInput": True}),
+                "optional_first_frame_ref": ("IMAGE",),
+            }
+        }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        # Allow backward-compatibility with saved workflows that had shifted widget indices
+        return True
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "SLICE_CONTEXT", "VHS_VIDEOINFO", "IMAGE", "FLOAT", "INT", "STRING", "IMAGE", "IMAGE")
+    RETURN_NAMES = (
+        "chunk_images",
+        "chunk_audio",
+        "slice_context",
+        "video_info",
+        "timeline_preview",
+        "fps",
+        "frame_count",
+        "slice_info",
+        "prev_last_frame",
+        "prev_ref_frames",
+    )
+    FUNCTION = "slice_chunk"
+    CATEGORY = "MiniMaxH3/VideoEdit"
+
+    def slice_chunk(
+        self,
+        video_file: str,
+        project_name: str,
+        chunk_length: int = 124,
+        chunk_index: int = 0,
+        target_width: int = 0,
+        target_height: int = 0,
+        force_fps: float = 24.0,
+        slice_mode: str = "Auto Chunk Grid (网格切分)",
+        custom_start_frame: int = 0,
+        custom_end_frame: int = 124,
+        auto_advance: Any = "None (手动控制)",
+        prev_ref_frames_count: int = 16,
+        first_chunk_ref_mode: str = "Current Chunk First Frame (当前片段首帧)",
+        images: Optional[torch.Tensor] = None,
+        audio: Optional[Dict[str, Any]] = None,
+        fps: Optional[Any] = None,
+        optional_first_frame_ref: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        # Sanitize auto_advance (gracefully handle legacy workflows where 24 was stored)
+        valid_modes = [
+            "None (手动控制)",
+            "Next Chunk (顺序下一段)",
+            "Next Unedited (跳至下一未编辑)",
+        ]
+        if not isinstance(auto_advance, str) or auto_advance not in valid_modes:
+            auto_advance = "None (手动控制)"
+
+        try:
+            prev_ref_frames_count = max(1, int(prev_ref_frames_count))
+        except Exception:
+            prev_ref_frames_count = 16
+
+        valid_first_modes = [
+            "Current Chunk First Frame (当前片段首帧)",
+            "Black / Zero Frame (全黑空帧)",
+        ]
+        if not isinstance(first_chunk_ref_mode, str) or first_chunk_ref_mode not in valid_first_modes:
+            first_chunk_ref_mode = "Current Chunk First Frame (当前片段首帧)"
+
+        # Robust FPS resolution
+        effective_fps = 24.0
+        try:
+            if fps is not None and str(fps).strip() != "" and float(fps) > 0:
+                effective_fps = float(fps)
+            elif force_fps is not None and float(force_fps) > 0:
+                effective_fps = float(force_fps)
+        except (ValueError, TypeError):
+            try:
+                effective_fps = float(force_fps) if force_fps else 24.0
+            except Exception:
+                effective_fps = 24.0
+        chunk_imgs, chunk_aud, ctx, info, prev_last_frame, prev_ref_frames = slice_video_and_audio(
+            project_name=project_name,
+            video_file=video_file,
+            images=images,
+            audio=audio,
+            fps=effective_fps,
+            chunk_length=chunk_length,
+            chunk_index=chunk_index,
+            slice_mode=slice_mode,
+            custom_start_frame=custom_start_frame,
+            custom_end_frame=custom_end_frame,
+            target_width=target_width,
+            target_height=target_height,
+            prev_ref_frames_count=prev_ref_frames_count,
+            first_chunk_ref_mode=first_chunk_ref_mode,
+            optional_first_frame_ref=optional_first_frame_ref,
+            return_ref_frames=True,
+        )
+        ctx["auto_advance"] = auto_advance
+        session = get_or_create_timeline_session(project_name)
+        preview_card = render_timeline_indicator_image(
+            session=session,
+            active_chunk_idx=ctx["chunk_index"],
+            active_start=ctx["start_frame"],
+            active_end=ctx["end_frame"],
+        )
+
+        # Construct standard VHS_VIDEOINFO compatible dictionary for downstream nodes (e.g. VHS_VideoInfo)
+        total_f = session.meta.get("total_frames", chunk_imgs.shape[0])
+        src_w = session.meta.get("width", chunk_imgs.shape[2])
+        src_h = session.meta.get("height", chunk_imgs.shape[1])
+        src_fps = float(session.meta.get("fps", effective_fps))
+        cur_f = int(chunk_imgs.shape[0])
+        cur_w = int(chunk_imgs.shape[2])
+        cur_h = int(chunk_imgs.shape[1])
+
+        video_info = {
+            "source_fps": src_fps,
+            "source_frame_count": total_f,
+            "source_duration": round(total_f / src_fps, 4) if src_fps > 0 else 0.0,
+            "source_width": src_w,
+            "source_height": src_h,
+            "loaded_fps": float(effective_fps),
+            "loaded_frame_count": cur_f,
+            "loaded_duration": round(cur_f / effective_fps, 4) if effective_fps > 0 else 0.0,
+            "loaded_width": cur_w,
+            "loaded_height": cur_h,
+        }
+
+        return (
+            chunk_imgs,
+            chunk_aud,
+            ctx,
+            video_info,
+            preview_card,
+            float(effective_fps),
+            cur_f,
+            info,
+            prev_last_frame,
+            prev_ref_frames,
+        )
+
+
+class MiniMaxVideoPatchReassemblerNode:
+    """Seamless in-place video patch reassembler & timeline progress tracker.
+
+    Takes generated/edited clip and automatically replaces original frames in master video.
+    Detects unedited gaps, supports seam micro-blending, and exports assembled long video.
+    """
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "edited_images": ("IMAGE",),
+                "slice_context": ("SLICE_CONTEXT",),
+                "seam_blend_frames": ("INT", {"default": 2, "min": 0, "max": 16, "step": 1}),
+                "output_mode": ([
+                    "Full Assembled Video (完整拼装长视频)",
+                    "Current Patch Only (仅当前片段)",
+                ],),
+                "save_to_session": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "edited_audio": ("AUDIO",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "BOOLEAN", "STRING")
+    RETURN_NAMES = ("output_images", "output_audio", "is_all_completed", "timeline_summary")
+    FUNCTION = "reassemble_patch"
+    CATEGORY = "MiniMaxH3/VideoEdit"
+
+    def reassemble_patch(
+        self,
+        edited_images: torch.Tensor,
+        slice_context: Dict[str, Any],
+        seam_blend_frames: int = 2,
+        output_mode: str = "Full Assembled Video (完整拼装长视频)",
+        save_to_session: bool = True,
+        edited_audio: Optional[Dict[str, Any]] = None,
+    ):
+        project_name = slice_context.get("project_name", "Video_Edit_Project")
+        chunk_index = slice_context.get("chunk_index", 0)
+        start_frame = slice_context.get("start_frame", 0)
+        end_frame = slice_context.get("end_frame", edited_images.shape[0])
+
+        session = get_or_create_timeline_session(project_name)
+
+        if save_to_session:
+            session.patch_chunk(
+                chunk_index=chunk_index,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                edited_images=edited_images,
+                edited_audio=edited_audio,
+                seam_blend_frames=seam_blend_frames,
+            )
+
+        # Decide output
+        if "Current Patch Only" in output_mode:
+            out_imgs = edited_images
+            raw_aud = edited_audio or (session.master_audio if session.master_audio else None)
+        else:
+            # Output master assembled frames
+            if session.master_frames is not None:
+                out_imgs = session.master_frames
+            else:
+                out_imgs = edited_images
+
+            raw_aud = session.master_audio
+
+        fps = float(session.meta.get("fps", 24.0))
+        dur_samples = int(round(out_imgs.shape[0] / fps * 44100))
+        out_aud = standardize_audio_dict(raw_aud, default_sr=44100, fallback_samples=dur_samples)
+
+        is_all_done = bool(session.meta.get("is_fully_assembled", False))
+        cov_pct = session.meta.get("coverage_ratio", 0.0) * 100
+        total_frames = session.meta.get("total_frames", out_imgs.shape[0])
+        fps = session.meta.get("fps", 24.0)
+        gaps = session.meta.get("gaps", [])
+
+        if is_all_done:
+            status_text = (
+                f"✅ [全部完成 100%] 项目 '{project_name}' 已完成全部 {total_frames} 帧 "
+                f"({total_frames/fps:.2f}s) 替换组装，无任何遗漏！"
+            )
+        else:
+            gap_desc = ", ".join(f"#{g['chunk_index']}({g['start_frame']}~{g['end_frame']}帧)" for g in gaps[:3])
+            if len(gaps) > 3:
+                gap_desc += f"...共{len(gaps)}处"
+            status_text = (
+                f"⚡ [拼装进度: {cov_pct:.1f}%] 项目 '{project_name}' 已成功回填 Chunk #{chunk_index}！"
+                f"\n⚠️ 尚未完成/漏编辑分段: {gap_desc}"
+            )
+
+        return (out_imgs, out_aud, is_all_done, status_text)
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxDiskVideoStream": MiniMaxDiskVideoStreamNode,
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
@@ -1304,6 +1600,8 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxClipBinTreePicker": MiniMaxClipBinTreePickerNode,
     "MiniMaxSafeVAEDecode": MiniMaxSafeVAEDecodeNode,
     "MiniMaxSafeVAEDecodeAudio": MiniMaxSafeVAEDecodeAudioNode,
+    "MiniMaxVideoChunkSlicer": MiniMaxVideoChunkSlicerNode,
+    "MiniMaxVideoPatchReassembler": MiniMaxVideoPatchReassemblerNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1321,6 +1619,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxClipBinTreePicker": "MiniMax H3 Clip Bin Tree Picker (Lineage Graph)",
     "MiniMaxSafeVAEDecode": "MiniMax H3 Safe VAE Decode (Video)",
     "MiniMaxSafeVAEDecodeAudio": "MiniMax H3 Safe VAE Decode (Audio)",
+    "MiniMaxVideoChunkSlicer": "🎬 MiniMax Video Chunk Slicer (长视频智能切片器)",
+    "MiniMaxVideoPatchReassembler": "🧩 MiniMax Video Patch Reassembler (视频回填缝合器)",
 }
 
 

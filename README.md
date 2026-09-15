@@ -70,6 +70,8 @@
 
 | 节点名称 | 分类 | 说明 |
 | :--- | :--- | :--- |
+| **`MiniMax Video Chunk Slicer`** | `MiniMaxH3/VideoEdit` | 🎬 长视频智能切片器（零显存流式加载）：直接按需提取长视频片段，支持自动网格/自由区间切片，**支持直接输出上一片段末帧（单帧图片参考）与尾部序列（多帧视频参考）**，自动优先提取已编辑成果，为下游图生视频/视频延续提供无缝参考。 |
+| **`MiniMax Video Patch Reassembler`** | `MiniMaxH3/VideoEdit` | 🧩 长视频无缝回填缝合器：自动将生成的片段内存替换进母带时间轴，支持余弦微融合消除缝合线，可视化追踪全片完成度并一键导出最终成品 MP4。 |
 | **`MiniMax H3 Continuation Config`** | `MiniMaxH3/PrefixStream` | 选择默认的 `Native Masked AV` 或备选的 `Safe Native`，并设置用户可见的视频上下文长度。 |
 | **`MiniMax H3 Continuation Applier`** | `MiniMaxH3/PrefixStream` | 构建原生视频/音频遮罩并输出 `masked_latent`；在备选模式下应用避免冲突的关键帧条件。 |
 | **`MiniMax Trim Prefix`** | `MiniMaxH3/PrefixStream` | 在像素和音频波形空间裁切开头的重叠帧，避免 VAE 因果闪烁并保持同步。 |
@@ -94,7 +96,7 @@ cd ComfyUI-MiniMaxH3-PrefixStream
 pip install -r requirements.txt
 ```
 
-重启 ComfyUI 后，节点会出现在 `MiniMaxH3/PrefixStream` 分类下。
+重启 ComfyUI 后，节点会出现在 `MiniMaxH3/PrefixStream` 与 `MiniMaxH3/VideoEdit` 分类下。
 
 ---
 
@@ -115,10 +117,12 @@ node tests/test_clip_bin_frontend.cjs
 
 ## 示例工作流与文档
 
-- 📄 **可直接使用的工作流**：[`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
-  - 将这份完整的 42 节点 JSON 直接拖入 ComfyUI 画布，即可运行 PrefixStream 长视频生成。
+- 📄 **长视频切片与自动缝合工作流**：[`examples/MiniMaxH3_LongVideo_Slicer_Reassembler_Template.json`](examples/MiniMaxH3_LongVideo_Slicer_Reassembler_Template.json)
+  - 专为长视频重绘与连续接力打造的轻量工作流，包含智能切片器、上一段参考帧连线、VHS 规格读取与自动回填缝合。
+- 📄 **PrefixStream 连续生成工作流**：[`examples/MiniMaxH3_PrefixStream_v1.0.json`](examples/MiniMaxH3_PrefixStream_v1.0.json)
+  - 将这份完整的 42 节点 JSON 直接拖入 ComfyUI 画布，即可运行 Native Masked AV 续写长视频生成。
 - 📖 **中文详细使用指南**：[`docs/USER_GUIDE_CN.md`](docs/USER_GUIDE_CN.md)
-  - 包含硬件建议、参数调节、多片段无限续写流程与常见问题。
+  - 包含长视频切片器、参考帧输出连线、硬件建议、参数调节与常见问题。
 
 ---
 
