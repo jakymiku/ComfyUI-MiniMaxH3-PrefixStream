@@ -169,7 +169,7 @@ class TestTimelineSlicer(unittest.TestCase):
         # Master video shape matches original 150 frames
         self.assertEqual(out_imgs.shape[0], 150)
         self.assertFalse(is_done)  # Still has 26 frames in chunk 1 unedited
-        self.assertIn("尚未完成", summary)
+        self.assertTrue("尚未完成" in summary or "未生成" in summary)
 
     def test_direct_video_file_lazy_loading(self):
         """Verify direct video file ingest via ffmpeg without full-RAM pre-decoding."""
@@ -429,7 +429,7 @@ class TestTimelineSlicer(unittest.TestCase):
         self.assertTrue(torch.allclose(prev_last_f, c_imgs[0:1]))
         self.assertFalse(ctx["prev_ref_info"]["has_prev_chunk"])
         self.assertFalse(ctx["prev_ref_info"]["is_edited"])
-        self.assertIn("首段第0帧", info)
+        self.assertTrue("首段第0帧" in info or "初回第0フレーム" in info)
 
         # Mode B: Black / Zero Frame
         out_b = slicer.slice_chunk(
@@ -507,7 +507,7 @@ class TestTimelineSlicer(unittest.TestCase):
         self.assertTrue(ctx1["prev_ref_info"]["has_prev_chunk"])
         self.assertTrue(ctx1["prev_ref_info"]["is_edited"])
         self.assertEqual(ctx1["prev_ref_info"]["prev_frame_index"], 49)
-        self.assertIn("已编辑成果 ✅", info1)
+        self.assertTrue("已编辑成果 ✅" in info1 or "生成完了成果 ✅" in info1)
 
 
 if __name__ == "__main__":

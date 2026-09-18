@@ -1147,15 +1147,15 @@ def slice_video_and_audio(
     info_text = (
         f"🎬 [{session.project_name}] Chunk #{effective_chunk_idx + 1}/{total_chunks} "
         f"(Frames: {start_frame}~{end_frame}, {duration_sec:.2f}s/{total_duration:.2f}s) | "
-        f"全片完成度: {cov:.1f}%"
+        f"進捗: {cov:.1f}%"
     )
     if start_frame > 0:
         if is_prev_edited:
-            info_text += f" | 🔗 上段参考: 帧 #{start_frame - 1} (已编辑成果 ✅)"
+            info_text += f" | 🔗 直前参照: フレーム #{start_frame - 1} (生成完了成果 ✅)"
         else:
-            info_text += f" | 🔗 上段参考: 帧 #{start_frame - 1} (未编辑原片 ⚠️)"
+            info_text += f" | 🔗 直前参照: フレーム #{start_frame - 1} (未生成元動画 ⚠️)"
     else:
-        info_text += f" | 🔗 上段参考: 首段第0帧"
+        info_text += f" | 🔗 直前参照: 初回第0フレーム"
 
     if return_ref_frames:
         return chunk_images, chunk_audio, slice_context, info_text, prev_last_frame, prev_ref_frames
@@ -1187,9 +1187,9 @@ def render_timeline_indicator_image(
         f"Progress: {cov:.0f}%"
     )
     if gaps_count > 0:
-        header_str += f" | ⚠️ {gaps_count} 处未完成"
+        header_str += f" | ⚠️ {gaps_count} 箇所未生成"
     else:
-        header_str += " | ✅ 全部已就绪"
+        header_str += " | ✅ 全クリップ生成完了"
     draw.text((16, 12), header_str, fill=(226, 232, 240))
 
     track_x = 16
@@ -1224,13 +1224,13 @@ def render_timeline_indicator_image(
     draw.rectangle([ax1, track_y - 2, ax2 - 1, track_y + track_h + 2], outline=(250, 204, 21), width=2)
 
     draw.rectangle([16, height - 26, 26, height - 16], fill=(22, 163, 74))
-    draw.text((32, height - 28), "已编辑 (Completed)", fill=(148, 163, 184))
+    draw.text((32, height - 28), "生成完了 (Completed)", fill=(148, 163, 184))
 
     draw.rectangle([170, height - 26, 180, height - 16], fill=(71, 85, 105))
-    draw.text((186, height - 28), "原片 (Unprocessed)", fill=(148, 163, 184))
+    draw.text((186, height - 28), "未生成 (Unprocessed)", fill=(148, 163, 184))
 
     draw.rectangle([320, height - 26, 330, height - 16], fill=(234, 179, 8))
-    draw.text((336, height - 28), "当前选中 (Active)", fill=(148, 163, 184))
+    draw.text((336, height - 28), "選択中 (Active)", fill=(148, 163, 184))
 
     return pil_to_tensor(img)
 

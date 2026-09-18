@@ -4,6 +4,10 @@
     display: flex;
     flex-direction: column;
     width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    contain: inline-size;
     background: #14161d;
     border: 1px solid #2d3343;
     border-radius: 8px;
@@ -22,12 +26,16 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
     border-bottom: 1px solid #232936;
     padding-bottom: 6px;
     margin-bottom: 8px;
 }
 
 .minimax-clip-bin-title {
+    min-width: 0;
+    flex-wrap: wrap;
     font-size: 12px;
     font-weight: 600;
     color: #93c5fd;
@@ -37,6 +45,9 @@
 }
 
 .minimax-clip-bin-project-tag {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     background: #1e293b;
     border: 1px solid #334155;
     color: #38bdf8;
@@ -47,6 +58,7 @@
 }
 
 .minimax-clip-bin-actions {
+    flex-wrap: wrap;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -72,6 +84,7 @@
 
 /* Horizontal card deck scroll view */
 .minimax-clip-bin-deck {
+    min-width: 0;
     display: flex;
     flex-direction: row;
     overflow-x: auto;

@@ -18,11 +18,40 @@ import nodes
 from engine import clip_bin_manager as bins
 from engine.clip_bin_api import update_clip_rating_api
 from engine.cache_manager import KVCacheConfig
-from pipeline.disk_stream import append_disk_clip
+from pipeline.disk_stream import append_disk_clip, selected_clip_chain, MiniMaxSelectedClipExportNode
 from pipeline.seam_protector import stitch_audio_waveforms
 
 
 class AVRegressions(unittest.TestCase):
+    def test_easy_seconds_accounts_for_continuation(self):
+        settings = nodes.MiniMaxEasyVideoSettingsNode()
+        initial = settings.calculate("512x512 / Test square", 512, 512, 3)["result"]
+        self.assertEqual(initial[:3], (512, 512, 73))
+        context = nodes.pack_av_latent(torch.zeros(1, 24, 22, 24, 40), torch.zeros(1, 32, 2, 122))
+        continued = settings.calculate("512x512 / Test square", 512, 512, 3, context)["result"]
+        self.assertEqual(continued[:3], (640, 384, 107))
+        self.assertIn("68f", continued[3])
+
+    def test_easy_seconds_caps_context_to_available_frames(self):
+        context = nodes.pack_av_latent(torch.zeros(1, 24, 22, 2, 2), torch.zeros(1, 32, 2, 122))
+        settings = nodes.MiniMaxEasyVideoSettingsNode()
+        result = settings.calculate("Manual", 512, 512, 3, context, KVCacheConfig(rolling_frames=90))["result"]
+        self.assertEqual(result[2], 107)
+        for seconds in [0.25, 1, 3, 5, 10]:
+            result = settings.calculate("Manual", 517, 381, seconds)["result"]
+            self.assertEqual(result[0:2], (512, 384))
+            self.assertEqual(result[2] % 17, 5)
+            self.assertLessEqual(abs(result[2] - seconds * 24), 8.5)
+
+    def test_interpolation_keeps_twelve_second_timeline(self):
+        # RIFE emits (N - 1) * multiplier + 1, omitting a trailing frame interval.
+        frames = torch.arange(1436).reshape(1436, 1, 1, 1)
+        images, fps = nodes.MiniMaxVideoFrameRateNode().resample(frames, 288, 24, 5, 60)
+        self.assertEqual((len(images), fps), (720, 60))
+        self.assertEqual(images[0].item(), 0)
+        self.assertEqual(images[-1].item(), 1435)
+        self.assertEqual(images[300].item(), 600)
+
     def test_plain_video_batch_is_not_split_into_audio(self):
         samples = torch.zeros(3, 24, 37, 2, 2)
         video, audio = nodes._unpack_latent({"samples": samples})
@@ -85,6 +114,19 @@ class AVRegressions(unittest.TestCase):
 
 
 class StorageRegressions(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg required")
+    def test_encoder_preserves_all_frames_with_short_or_rounded_audio(self):
+        images = torch.zeros(73, 16, 16, 3)
+        for samples in (32000, round(73 / 24 * 32000), 128000):
+            with self.subTest(samples=samples):
+                output = os.path.join(self.temp.name, f"audio_{samples}.mkv")
+                audio = {"waveform": torch.zeros(1, 2, samples), "sample_rate": 32000}
+                self.assertTrue(bins.encode_images_to_mp4(images, output, 24, audio))
+                probe = subprocess.run([shutil.which("ffprobe"), "-v", "error", "-count_frames",
+                                        "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames",
+                                        "-of", "json", output], capture_output=True, text=True, check=True)
+                self.assertEqual(int(json.loads(probe.stdout)["streams"][0]["nb_read_frames"]), 73)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="minimax_regression_")
         folder_paths = types.ModuleType("folder_paths")
@@ -95,6 +137,26 @@ class StorageRegressions(unittest.TestCase):
     def tearDown(self):
         self.modules.stop()
         self.temp.cleanup()
+
+    @unittest.skipUnless(shutil.which("ffprobe"), "FFprobe required")
+    def test_export_includes_selected_branch_not_rejected_sibling(self):
+        for clip_id, parent, color in [('clip_root', None, 0), ('clip_rejected', 'clip_root', 1), ('clip_selected', 'clip_root', 2)]:
+            directory = Path(bins.get_clip_dir('Project', clip_id))
+            directory.mkdir()
+            bins.atomic_write_json(str(directory/'meta.json'), {'parent_clip_id':parent,'video_file':'video.mp4'})
+            images = torch.zeros(5, 16, 16, 3)
+            images[...,color] = 1
+            self.assertTrue(bins.encode_images_to_mp4(images, str(directory/'video.mp4'), 24))
+        self.assertEqual([c[0] for c in selected_clip_chain('Project','clip_selected')], ['clip_root','clip_selected'])
+        path, ids = MiniMaxSelectedClipExportNode().export_selected('Project','clip_selected')
+        self.assertNotIn('rejected', ids)
+        probe = json.loads(subprocess.check_output([shutil.which('ffprobe'),'-v','error','-count_frames','-show_streams','-of','json',path]))
+        video = next(s for s in probe['streams'] if s['codec_type']=='video')
+        self.assertEqual(int(video['nb_read_frames']),10)
+        directory = Path(bins.get_clip_dir('Project','clip_root'))
+        bins.atomic_write_json(str(directory/'meta.json'), {'parent_clip_id':'clip_selected','video_file':'video.mp4'})
+        with self.assertRaisesRegex(ValueError,'cycle'):
+            selected_clip_chain('Project','clip_selected')
 
     def test_path_escape_rejected_without_deleting(self):
         outside = Path(self.temp.name, "outside")

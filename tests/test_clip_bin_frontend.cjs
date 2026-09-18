@@ -43,6 +43,7 @@ class Element {
             removeEventListener: key => listeners.delete(key) },
         setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
         URL, console, encodeURIComponent,
+        getLocale: () => 'ja', t: key => key,
     });
     const source = fs.readFileSync(path.join(__dirname, '../web/clip_bin_picker.js'), 'utf8')
         .replace(/^import .*;\r?\n/gm, '')
@@ -56,7 +57,7 @@ class Element {
     }
 
     // Test 1: Deck View with MiniMaxClipBinPicker
-    const node = { id: 1, size: [520, 380], addDOMWidget() {}, widgets: [
+    const node = { id: 1, size: [520, 380], addDOMWidget() {}, setSize(size) { this.size = size; }, widgets: [
         { name: 'project_name', value: hostile }, { name: 'clip_selection', value: hostile },
         { name: 'filter_rating', value: 'All' },
     ] };
@@ -72,6 +73,13 @@ class Element {
     }
     assert.ok(htmlWrites.some(value => value.includes('&lt;img')), 'hostile text remains visible as text');
     assert.equal(context.pwned, undefined);
+    const treeButton = elements.find(e => e.innerText === 'picker.view_tree');
+    const deckButton = elements.find(e => e.innerText === 'picker.view_deck');
+    for (let i = 0; i < 3; i++) {
+        treeButton.onclick({ stopPropagation() {} });
+        deckButton.onclick({ stopPropagation() {} });
+    }
+    assert.equal(node.size[0], 520, 'view switching must preserve user width');
     assert.equal(listeners.size, 2);
     node.onRemoved();
     await drainTimers();

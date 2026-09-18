@@ -40,6 +40,11 @@ except ImportError:
 logger = logging.getLogger("minimax_clip_bin")
 
 
+def get_ffmpeg_exe() -> Optional[str]:
+    """Find and return the ffmpeg executable path."""
+    return shutil.which("ffmpeg")
+
+
 _project_locks = {}
 _project_locks_guard = threading.Lock()
 
@@ -380,9 +385,27 @@ def resolve_source_video_path(val: Any) -> Optional[str]:
             for ext in [".mp4", "-audio.mp4", ".webm"]:
                 derived_candidates.append(c + ext)
 
+    # Prioritize candidates with '-audio' so audio-enabled videos come first
+    def _audio_priority(path_str: str) -> int:
+        pl = path_str.lower()
+        if "-audio" in pl or "_audio" in pl:
+            return 0
+        return 1
+
+    video_candidates.sort(key=_audio_priority)
+    derived_candidates.sort(key=_audio_priority)
+
     search_list = video_candidates + derived_candidates
 
+    # If any candidate doesn't end with -audio, also probe its -audio companion first
+    expanded_search_list = []
     for c in search_list:
+        stem, ext = os.path.splitext(c)
+        if ext.lower() in VIDEO_EXTENSIONS and not stem.lower().endswith(("-audio", "_audio")):
+            expanded_search_list.append(stem + "-audio" + ext)
+        expanded_search_list.append(c)
+
+    for c in expanded_search_list:
         # 1. Direct path
         if os.path.isfile(c) and c.lower().endswith(VIDEO_EXTENSIONS):
             return os.path.abspath(c)

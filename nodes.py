@@ -35,7 +35,7 @@ try:
         latent_steps_to_pixel_frames,
     )
     from .pipeline.long_video_director import LongVideoSession
-    from .pipeline.disk_stream import MiniMaxDiskVideoStreamNode
+    from .pipeline.disk_stream import MiniMaxDiskVideoStreamNode, MiniMaxSelectedClipExportNode
     from .pipeline.native_masked_av import apply_native_masked_av
     from .pipeline.seam_protector import (
         audio_equal_power_crossfade,
@@ -80,7 +80,7 @@ except (ImportError, ValueError):
         latent_steps_to_pixel_frames,
     )
     from pipeline.long_video_director import LongVideoSession
-    from pipeline.disk_stream import MiniMaxDiskVideoStreamNode
+    from pipeline.disk_stream import MiniMaxDiskVideoStreamNode, MiniMaxSelectedClipExportNode
     from pipeline.native_masked_av import apply_native_masked_av
     from pipeline.seam_protector import (
         audio_equal_power_crossfade,
@@ -144,11 +144,11 @@ class MiniMaxPrefixCacheConfigNode:
                     "Safe Native (Fallback)"
                 ], {
                     "default": "Native Masked AV (Recommended)",
-                    "tooltip": "Native Masked AV 将上一段 AV latent 直接复制到目标开头，并用 ComfyUI 原生 video/audio denoise mask 分别保护；Safe Native 是短片段或旧工作流的兼容备选。"
+                    "tooltip": "【継続生成方式】Native Masked AV (推奨): 前クリップの音画潜在(AV Latent)を先頭に配置し、ComfyUI標準のデノイズマスクで厳密に保護します（画質劣化・ブロックノイズ防止）。Safe Native: 旧仕様ワークフロー向けのフォールバック方式です。"
                 }),
                 "continuation_frames": (["39", "90", "141", "192"], {
                     "default": "39",
-                    "tooltip": "用户可见的视频续写上下文帧数。39 帧约 1.625 秒；较长选项会自动下取整到精确音视频公共边界。"
+                    "tooltip": "【参照フレーム数】直前クリップから引き継ぐ末尾参照フレーム数です（39フレーム ≒ 約1.6秒。17k+5のモデル境界に最適化されます）。"
                 }),
             },
             "optional": {
@@ -157,11 +157,11 @@ class MiniMaxPrefixCacheConfigNode:
                     "Full Previous Tail"
                 ], {
                     "default": "Match Video Handover",
-                    "tooltip": "Match Video Handover 保证音频保护区与视频严格 100% 对齐（杜绝 0.7s 重音复读与累积音画失步）；Full Previous Tail 保留上一段完整尾部音频。"
+                    "tooltip": "【音声引き継ぎ方式】Match Video Handover: 音声保護区間を映像と100%厳密同期させ、音ズレや二重再生を防止します。Full Previous Tail: 直前クリップの末尾音声をそのまま保持します。"
                 }),
                 "audio_feather_ticks": ("INT", {
                     "default": 2, "min": 0, "max": 16, "step": 1,
-                    "tooltip": "音频掩码交界处的平滑余弦过渡步数（40Hz Latent 周期，推荐 2~4 步，杜绝 SDE/DiT 掩码跳变爆音）"
+                    "tooltip": "【音声マスク境界フェザー】音声接合部のコサイン補間ステップ数（40Hz Latent周期、推奨2〜4ステップ。音飛びやノイズを防止します）。"
                 }),
             }
         }
@@ -345,9 +345,9 @@ class MiniMaxPrefixCacheApplierNode:
                 "conditioning": ("CONDITIONING",),
             },
             "optional": {
-                "cache_config": ("MINIMAX_CACHE_CONFIG",),
-                "context_latent": ("LATENT", {"tooltip": "上一段完整的 H3 音视频 LATENT。首段生成时留空。"}),
-                "target_latent": ("LATENT", {"tooltip": "连接 MiniMaxH3ReferenceToVideo 的目标 LATENT；Native Masked AV 会输出带独立音视频 noise_mask 的采样 latent。"}),
+                "cache_config": ("MINIMAX_CACHE_CONFIG", {"tooltip": "MiniMax H3 継続生成設定ノードから出力された設定オブジェクト。"}),
+                "context_latent": ("LATENT", {"tooltip": "【直前クリップの潜在データ】直前クリップの音画潜在(AV Latent)を入力します。初回生成時は空のままで構いません。"}),
+                "target_latent": ("LATENT", {"tooltip": "【生成対象の潜在データ】MiniMaxH3ReferenceToVideo の潜在出力を接続します。Native Masked AV 方式では保護マスク付きの潜在データを出力します。"}),
             }
         }
 
@@ -472,17 +472,17 @@ class MiniMaxTrimPrefixLatentNode:
             "required": {
                 "trim_frames": ("INT", {
                     "default": 0, "min": 0, "max": 124, "step": 1,
-                    "tooltip": "裁切的前置重叠帧数 (如 22 帧)。设为 0 且连接了 session/config 时将自动识别"
+                    "tooltip": "【先頭削除フレーム数】直前クリップから引き継いだ重複フレームの削除数です（0を指定しsession/configを接続すると自動計算されます）。"
                 }),
             },
             "optional": {
-                "images": ("IMAGE", {"tooltip": "【强烈推荐】解码后的完整画面。在像素空间裁切，彻底杜绝 VAE 闪烁与偏色！"}),
-                "audio": ("AUDIO", {"tooltip": "【强烈推荐】解码后的音频。精确同步毫秒级样本截断，杜绝音画不同步"}),
-                "latent": ("LATENT", {"tooltip": "原始采样 latent (可选，若已连接 images/audio 则无需裁切 latent)"}),
+                "images": ("IMAGE", {"tooltip": "【推奨】デコード後の映像フレーム。ピクセル空間で直接トリミングを行い、VAEのフリッカーや色変化を完全に防止します。"}),
+                "audio": ("AUDIO", {"tooltip": "【推奨】デコード後の音声データ。ミリ秒単位で厳密に同期トリミングを行います。"}),
+                "latent": ("LATENT", {"tooltip": "サンプラーから出力された潜在データ（画像/音声を直接トリミングする場合は省略可能）。"}),
                 "session": ("MINIMAX_SESSION",),
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
-                "match_tail": ("BOOLEAN", {"default": True, "tooltip": "尾部时长严格对齐：消除 H3 40Hz 音频与 24fps 画面约8ms的网格舍入累积误差"}),
+                "match_tail": ("BOOLEAN", {"default": True, "tooltip": "【末尾整合】40Hz音声と24fps映像の境界丸め誤差を補正し、厳密に尺を一致させます。"}),
                 "video_latent": ("LATENT",),  # Backward compatibility alias
             }
         }
@@ -604,31 +604,31 @@ class MiniMaxLongVideoStitcherNode:
             "required": {
                 "trim_frames": ("INT", {
                     "default": 0, "min": 0, "max": 192, "step": 1,
-                    "tooltip": "当前片段在缝合前需要裁切的前缀帧数。设为 0 时若连接了 session/config 将自动获取"
+                    "tooltip": "【重複削除フレーム数】結合前に削除する重複先頭フレーム数（0を指定しsession/config接続時は自動計算）。"
                 }),
                 "crossfade_frames": ("INT", {
                     "default": 4, "min": 0, "max": 30, "step": 1,
-                    "tooltip": "画面重叠接缝处的余弦 S 曲线混合平滑过渡帧数 (推荐 2~6 帧)"
+                    "tooltip": "【クロスフェードフレーム数】映像接合部を滑らかにS字ブレンドするフレーム数（推奨: 2〜6フレーム）。"
                 }),
                 "luminance_match": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "自动检测并平滑纠正前后片段的全局亮度色差，杜绝接缝闪光"
+                    "tooltip": "【輝度自動補正】前後クリップの全体的な明暗差・露出差を自動検出し補正します。"
                 }),
                 "luminance_fade_frames": ("INT", {
                     "default": 16, "min": 1, "max": 60, "step": 1,
-                    "tooltip": "亮度增益向原生亮度平滑回退过渡的帧数"
+                    "tooltip": "【輝度補正フェードフレーム数】補正ゲインを元の明るさへ徐々に戻す移行フレーム数。"
                 }),
                 "crossfade_ms": ("FLOAT", {
                     "default": 15.0, "min": 0.0, "max": 500.0, "step": 1.0,
-                    "tooltip": "音频重叠区线性交叉淡化时长 (毫秒)，彻底消除接缝爆音 (Click/Pop)"
+                    "tooltip": "【音声クロスフェード時間(ms)】音声接合部のフェード時間。クリックノイズやプチ音を完全に防止します。"
                 }),
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
             },
             "optional": {
-                "prev_images": ("IMAGE", {"tooltip": "前置已累积的长视频画面。首段生成时可留空"}),
-                "curr_images": ("IMAGE", {"tooltip": "当前生成的片段画面 (来自 VAEDecode 或 TrimPrefix)"}),
-                "prev_audio": ("AUDIO", {"tooltip": "前置已累积的音频流。首段生成时可留空"}),
-                "curr_audio": ("AUDIO", {"tooltip": "当前生成的音频流 (来自 VAEDecodeAudio 或 TrimPrefix)"}),
+                "prev_images": ("IMAGE", {"tooltip": "これまで結合された先行映像。初回生成時は空で構いません。"}),
+                "curr_images": ("IMAGE", {"tooltip": "今回生成された映像フレーム（VAEDecode または TrimPrefix から）。"}),
+                "prev_audio": ("AUDIO", {"tooltip": "これまで結合された先行音声。初回生成時は空で構いません。"}),
+                "curr_audio": ("AUDIO", {"tooltip": "今回生成された音声データ（VAEDecodeAudio または TrimPrefix から）。"}),
                 "session": ("MINIMAX_SESSION",),
                 "cache_config": ("MINIMAX_CACHE_CONFIG",),
             }
@@ -725,6 +725,7 @@ class MiniMaxCacheMonitorNode:
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("telemetry_report",)
+    OUTPUT_NODE = True
     FUNCTION = "report"
     CATEGORY = "MiniMaxH3/PrefixStream"
 
@@ -934,27 +935,27 @@ class MiniMaxClipBinSaverNode:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "latent": ("LATENT", {"tooltip": "【核心音画潜空间】采样器输出的原生联合音画 Latent (支持 MiniMax H3 官方 NestedTensor，包含完整视频与音频潜空间)"}),
+                "latent": ("LATENT", {"tooltip": "【音画潜在データ】サンプラーから出力された統合AV Latent (MiniMax H3公式NestedTensor対応)。"}),
                 "project_name": ("STRING", {
                     "default": "Default_Project",
-                    "tooltip": "【项目/分镜箱名称】指定当前镜头归档的项目库（例如：科幻短片、广告场景1）。不同项目之间素材完全隔离，方便多故事独立管理"
+                    "tooltip": "【プロジェクト/プール名】クリップを分類・保存するプロジェクトフォルダ名です（例: Default_Project）。"
                 }),
                 "shot_tag": ("STRING", {
                     "default": "Auto (自动编号)",
-                    "tooltip": "【镜头标签/备注】镜头的编号或简要动作描述（如：'Shot 1'、'男主回眸'、'远景空镜'）。填 'Auto (自动编号)' 时系统将根据项目内已有镜头数量自动顺延递增为 Shot 1, Shot 2..."
+                    "tooltip": "【クリップ名/ラベル】クリップの識別ラベル（'Auto (自动编号)' でプール内クリップ数に基づき自動連番 Shot 1, Shot 2...）。"
                 }),
                 "rating": ("INT", {
                     "default": 4, "min": 1, "max": 5, "step": 1,
-                    "tooltip": "【镜头星标打分】1~5 星质量评级。后续使用 Clip Bin Picker 加载接力时，可按星级一键过滤掉废案镜头，只接力高分镜头"
+                    "tooltip": "【品質評価】1〜5つ星のレーティング。後でギャラリーから高評価クリップのみを抽出して継続できます。"
                 }),
             },
             "optional": {
-                "images": ("IMAGE", {"tooltip": "【渲染像素画面】连接当前片段解码后的画面 (来自 VAEDecode 或 TrimPrefix)。连接后系统将自动截取真实的首帧与尾帧，生成超高清并排缩略图卡片！"}),
-                "audio": ("AUDIO", {"tooltip": "【音频流】连接当前片段的音频 (来自 TrimPrefix 或 VAEDecodeAudio)。当自动编码保存 MP4 视频时，将作为音轨同步封装"}),
-                "prompt": ("STRING", {"default": "", "tooltip": "【本段正向提示词】连接输入文本 (Input Text/Prompt)。自动入库保存到 meta.json，以便后续回顾镜头剧情与接力参考"}),
-                "parent_clip_id": ("STRING", {"default": "", "tooltip": "【父镜头血缘ID】连接上一段 Clip Bin Picker 输出的 clip_id。用于在元数据中清晰记录多版本分支历史与承接血缘"}),
-                "video_file_name": (any_type, {"default": "", "tooltip": "【关联合成视频名】连接当前片段合成保存节点 (VHS_VideoCombine) 的 Filenames 输出，或手动输入关联的 MP4 文件名，系统将自动将该视频归档到资产包中"}),
-                "save_video": ("BOOLEAN", {"default": True, "tooltip": "【归档完整视频】是否在资产包内归档或编码生成完整 MP4 视频文件。开启后 Clip Bin Picker 画廊将支持悬停实时微动播放与声画视听弹窗！"}),
+                "images": ("IMAGE", {"tooltip": "【レンダリング映像】デコード後の映像フレーム。登録時に先頭と末尾のサムネイルカードを自動生成します。"}),
+                "audio": ("AUDIO", {"tooltip": "【音声データ】クリップに付随する音声データ。MP4保存時に自動で多重化されます。"}),
+                "prompt": ("STRING", {"default": "", "tooltip": "【プロンプト】生成時のプロンプト文字列。メタデータに保存されギャラリーで確認できます。"}),
+                "parent_clip_id": ("STRING", {"default": "", "tooltip": "【親クリップID】直前のクリップ選択ノードから出力された clip_id を接続し、派生ツリーを記録します。"}),
+                "video_file_name": (any_type, {"default": "", "tooltip": "【生成動画ファイル】VHS_VideoCombine 等で保存した MP4 ファイル名を関連付けます。"}),
+                "save_video": ("BOOLEAN", {"default": True, "tooltip": "【動画アーカイブ】プール内に動画ファイルを保持し、ギャラリーでのホバー再生・プレビューを有効にします。"}),
             }
         }
 
@@ -1000,6 +1001,15 @@ class MiniMaxClipBinSaverNode:
                 if not val:
                     return ""
                 # Prioritize video extensions in list/tuple
+                # First pass: Look for audio-enabled video (-audio)
+                for item in val:
+                    if isinstance(item, (list, tuple)):
+                        extracted = _extract_filename(item)
+                        if extracted and "-audio" in extracted.lower() and any(extracted.lower().endswith(e) for e in (".mp4", ".webm", ".mov", ".mkv")):
+                            return extracted
+                    elif isinstance(item, str) and "-audio" in item.lower() and any(item.lower().endswith(e) for e in (".mp4", ".webm", ".mov", ".mkv")):
+                        return item.strip()
+                # Second pass: Standard videos
                 for item in val:
                     if isinstance(item, (list, tuple)):
                         extracted = _extract_filename(item)
@@ -1037,7 +1047,7 @@ class MiniMaxClipBinSaverNode:
         try:
             import folder_paths
             base_dir = folder_paths.get_output_directory()
-            subfolder = os.path.relpath(clip_dir, base_dir)
+            subfolder = os.path.relpath(clip_dir, os.path.realpath(base_dir))
         except Exception:
             subfolder = ""
 
@@ -1060,6 +1070,10 @@ class MiniMaxClipBinPickerNode:
     """Visually browses, filters, and loads clips from the Clip Bin with instant tail-frame output."""
 
     @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    @classmethod
     def INPUT_TYPES(cls):
         projects = list_projects()
         default_proj = projects[0] if projects else "Default_Project"
@@ -1067,7 +1081,7 @@ class MiniMaxClipBinPickerNode:
             "required": {
                 "project_name": ("STRING", {
                     "default": default_proj,
-                    "tooltip": "【选择项目库】要读取素材的项目文件夹名称（如 Default_Project）。可在 ComfyUI 运行控制台查看已存在的项目名称列表"
+                    "tooltip": "【プロジェクト選択】読み込むクリッププール名（例: Default_Project）。"
                 }),
                 "mode": ([
                     "Auto (首段全新 / 后续自动接力)",
@@ -1075,7 +1089,7 @@ class MiniMaxClipBinPickerNode:
                     "Strict Chaining (必须接力指定或最新镜头)"
                 ], {
                     "default": "Auto (首段全新 / 后续自动接力)",
-                    "tooltip": "【运行工作模式】\n• Auto（强烈推荐）：若项目库为空自动作为首段全新生成；后续运行时全自动接续上一段，无需任何拔线或手动操作！\n• Force Initial：强制开辟首段，忽略库内所有历史素材。\n• Strict Chaining：严格接力模式，库内无镜头时直接报错提示"
+                    "tooltip": "【動作モード】\n• Auto (推奨): 初回は新規生成、2本目以降は直前の最新クリップから自動継続（配線の差し替え不要）\n• Force Initial: 常に完全新規生成（単発クリップ、過去履歴を無視）\n• Strict Chaining: 厳格な継続モード（プールが空の場合はエラー）"
                 }),
                 "filter_rating": ([
                     "All (1-5 ⭐)",
@@ -1084,24 +1098,24 @@ class MiniMaxClipBinPickerNode:
                     "⭐⭐⭐⭐⭐ (5 ⭐)"
                 ], {
                     "default": "All (1-5 ⭐)",
-                    "tooltip": "【星级过滤器】只读取大于等于该评级的镜头（如过滤掉 1~3 星的测试废案，只接续 4 星或 5 星的满意镜头）"
+                    "tooltip": "【評価フィルター】指定した星の数以上のクリップのみを一覧に表示します（例: 4星以上のみを抽出）。"
                 }),
                 "clip_selection": ("STRING", {
                     "default": "latest",
-                    "tooltip": "【镜头定位】\n• 填 'latest'（默认）：自动调取最新生成的优质镜头进行无缝接续\n• 填 clip_id（如 clip_20260908...）：精确跳转或回溯到指定的历史镜头开启新分支\n• 填 shot 名称：按镜头标签名称匹配"
+                    "tooltip": "【継続元クリップの指定】\n• 'latest' (推奨): 直前に生成された最新クリップを自動選択\n• clip_id: 特定のクリップIDを指定して別分岐を開始\n• ラベル名: クリップのラベル名で指定"
                 }),
             },
             "optional": {
                 "custom_clip_path": ("STRING", {
                     "default": "",
-                    "tooltip": "【自定义物理路径覆盖】可选高级选项。填入绝对路径可直接载入任意磁盘目录下的 Clip Bin 镜头文件夹"
+                    "tooltip": "【カスタムパス】任意のフォルダからクリップを読み込む場合の絶対パス（通常は空）。"
                 }),
                 "view_mode": ([
                     "Deck (卡片流)",
                     "Tree (关系树)"
                 ], {
                     "default": "Deck (卡片流)",
-                    "tooltip": "【界面展现模式】卡片横向滚动流 或 分支血缘拓扑树（亦可在节点界面顶部一键切换）"
+                    "tooltip": "【表示形式】🎴 カード一覧 または 🌳 系統ツリー（ノード上のボタンでも切替可能）。"
                 }),
             }
         }
@@ -1209,7 +1223,7 @@ class MiniMaxClipBinTreePickerNode(MiniMaxClipBinPickerNode):
             "Deck (卡片流)"
         ], {
             "default": "Tree (关系树)",
-            "tooltip": "【界面展现模式】分支血缘拓扑树 或 卡片横向滚动流（亦可在节点界面顶部一键切换）"
+            "tooltip": "【表示形式】🌳 系統ツリー または 🎴 カード一覧（ノード上のボタンでも切替可能）。"
         })
         return types
 
@@ -1570,22 +1584,291 @@ class MiniMaxVideoPatchReassemblerNode:
 
         if is_all_done:
             status_text = (
-                f"✅ [全部完成 100%] 项目 '{project_name}' 已完成全部 {total_frames} 帧 "
-                f"({total_frames/fps:.2f}s) 替换组装，无任何遗漏！"
+                f"✅ [全クリップ統合完了 100%] プロジェクト '{project_name}' の全 {total_frames} フレーム "
+                f"({total_frames/fps:.2f}秒) が差し替え・統合されました！"
             )
         else:
-            gap_desc = ", ".join(f"#{g['chunk_index']}({g['start_frame']}~{g['end_frame']}帧)" for g in gaps[:3])
+            gap_desc = ", ".join(f"#{g['chunk_index']}({g['start_frame']}~{g['end_frame']}F)" for g in gaps[:3])
             if len(gaps) > 3:
-                gap_desc += f"...共{len(gaps)}处"
+                gap_desc += f"...計{len(gaps)}箇所"
             status_text = (
-                f"⚡ [拼装进度: {cov_pct:.1f}%] 项目 '{project_name}' 已成功回填 Chunk #{chunk_index}！"
-                f"\n⚠️ 尚未完成/漏编辑分段: {gap_desc}"
+                f"⚡ [統合進捗: {cov_pct:.1f}%] プロジェクト '{project_name}' の クリップ #{chunk_index} を正常に統合しました！"
+                f"\n⚠️ 未生成またはスキップされたクリップ: {gap_desc}"
             )
 
         return (out_imgs, out_aud, is_all_done, status_text)
 
 
+class MiniMaxEasyVideoSettingsNode:
+    PRESETS = {
+        "Auto: Match Input Image (0.25 MP / Test)": (0, 0),
+        "Auto: Match Input Image (0.6 MP / Standard)": (0, 0),
+        "Auto: Match Input Image (1.0 MP / High)": (0, 0),
+        "512x512 / Test square": (512, 512),
+        "640x384 / Test landscape": (640, 384),
+        "384x640 / Test portrait": (384, 640),
+        "960x544 / Turbo example": (960, 544),
+        "544x960 / Portrait": (544, 960),
+        "768x768 / H3 square": (768, 768),
+        "1344x768 / H3 native landscape": (1344, 768),
+        "768x1344 / H3 native portrait": (768, 1344),
+    }
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "resolution": (list(cls.PRESETS) + ["Manual"], {"default": "Auto: Match Input Image (0.6 MP / Standard)"}),
+            "manual_width": ("INT", {"default": 512, "min": 32, "max": 8192, "step": 32}),
+            "manual_height": ("INT", {"default": 512, "min": 32, "max": 8192, "step": 32}),
+            "seconds_to_add": ("FLOAT", {"default": 3.0, "min": 0.25, "max": 120.0, "step": 0.25,
+                "tooltip": "今回追加する秒数。継続用の重複は自動加算。実際の尺は17k+5に丸めた近似値。"}),
+        }, "optional": {
+            "image": ("IMAGE",),
+            "context_latent": ("LATENT",),
+            "cache_config": ("MINIMAX_CACHE_CONFIG",)
+        }}
+
+    RETURN_TYPES = ("INT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("width", "height", "length", "summary")
+    FUNCTION = "calculate"
+    CATEGORY = "MiniMaxH3/PrefixStream"
+
+    def calculate(self, resolution, manual_width, manual_height, seconds_to_add,
+                  image=None, context_latent=None, cache_config=None):
+        import math
+        auto_info = ""
+        if resolution.startswith("Auto"):
+            if image is not None and hasattr(image, "shape") and len(image.shape) >= 3:
+                orig_h = int(image.shape[1])
+                orig_w = int(image.shape[2])
+                aspect_ratio = orig_w / max(1, orig_h)
+
+                if "0.25 MP" in resolution:
+                    target_pixels = 512 * 512
+                elif "1.0 MP" in resolution:
+                    target_pixels = 1024 * 1024
+                else:
+                    target_pixels = 768 * 768
+
+                calc_w = math.sqrt(target_pixels * aspect_ratio)
+                calc_h = math.sqrt(target_pixels / aspect_ratio)
+
+                width = max(32, int(round(calc_w / 32)) * 32)
+                height = max(32, int(round(calc_h / 32)) * 32)
+                auto_info = f"【画像連動 {orig_w}×{orig_h} (比率 {orig_w/orig_h:.2f}:1 ➔ 32倍数へ調整)】"
+            else:
+                width, height = (512, 512) if "0.25 MP" in resolution else (1024, 1024) if "1.0 MP" in resolution else (768, 768)
+                auto_info = "【画像未接続：標準フォールバック】"
+        elif resolution == "Manual":
+            width, height = manual_width, manual_height
+        else:
+            width, height = self.PRESETS[resolution]
+
+        width = max(32, int(round(width / 32)) * 32)
+        height = max(32, int(round(height / 32)) * 32)
+        video, audio = _unpack_latent(context_latent)
+        overlap = 0
+        cfg = cache_config or KVCacheConfig()
+        if video is not None and audio is not None and cfg.is_native_masked_av_mode():
+            available = latent_steps_to_pixel_frames(video.shape[2])
+            cap = min(cfg.rolling_frames, available)
+            if cap >= 39:
+                overlap = 39 + ((cap - 39) // 51) * 51
+                # A continuation must use the saved latent's spatial grid.
+                width, height = int(video.shape[4]) * 16, int(video.shape[3]) * 16
+        requested = max(5, float(seconds_to_add) * 24 + overlap)
+        length = 5 + max(0, int((requested - 5) / 17 + 0.5)) * 17
+        while length <= overlap:
+            length += 17
+        added = length - overlap
+        summary = (f"{width} × {height} / 24 fps | "
+                   f"{auto_info + ' ' if auto_info else ''}"
+                   f"{'継続（前クリップの解像度）' if overlap else '新規'}\n"
+                   f"生成 {length}f − 重複 {overlap}f = 追加 {added}f / {added / 24:.3f}秒")
+        return {"ui": {"text": [summary]}, "result": (width, height, length, summary)}
+
+
+class MiniMaxVideoFrameRateNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "images": ("IMAGE",),
+            "source_frame_count": ("INT", {"default": 73, "min": 1}),
+            "source_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0}),
+            "interpolation_multiplier": ("INT", {"default": 5, "min": 1, "max": 16}),
+            "target_fps": ("FLOAT", {"default": 60.0, "min": 1.0, "max": 120.0}),
+        }}
+
+    RETURN_TYPES = ("IMAGE", "FLOAT")
+    RETURN_NAMES = ("images", "fps")
+    FUNCTION = "resample"
+    CATEGORY = "MiniMaxH3/PrefixStream"
+
+    def resample(self, images, source_frame_count, source_fps, interpolation_multiplier, target_fps):
+        count = max(1, round(source_frame_count / source_fps * target_fps))
+        indices = [min(len(images) - 1, round(i * source_fps * interpolation_multiplier / target_fps))
+                   for i in range(count)]
+        return (images[indices], float(target_fps))
+
+
+class MiniMaxVideoPathResolverNode:
+    """Intelligently resolves target video path for Stage 4 enhancement.
+    Prioritizes:
+    1. If use_lms_if_available is True and lms_video was executed and exists -> use lms_video
+    2. If joined_video was executed and exists -> use joined_video
+    3. If neither was executed (e.g. running Stage 4 alone) -> auto-resolve latest exported video in project bin
+    4. Auto-resolve latest combined video in output/H3_Easy_v5/
+    5. Manual fallback path
+    """
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "project_name": ("STRING", {"default": "H3_SilverCap_1MP_Test"}),
+                "use_lms_if_available": ("BOOLEAN", {"default": False}),
+                "fallback_path": ("STRING", {"default": "", "multiline": False}),
+            },
+            "optional": {
+                "joined_video": ("STRING", {"forceInput": True}),
+                "lms_video": ("STRING", {"forceInput": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("video_path",)
+    FUNCTION = "resolve"
+    CATEGORY = "MiniMaxH3/PrefixStream"
+
+    def resolve(self, project_name: str, use_lms_if_available: bool = False, fallback_path: str = "", joined_video: str = "", lms_video: str = "") -> Tuple[str]:
+        # 1. LMS video if selected and valid
+        if use_lms_if_available and lms_video and isinstance(lms_video, str):
+            p = lms_video.strip()
+            if p and os.path.exists(p):
+                logger.info(f"[VideoPathResolver] Using upstream LMS video: {p}")
+                return (p,)
+
+        # 2. Joined video if valid
+        if joined_video and isinstance(joined_video, str):
+            p = joined_video.strip()
+            if p and os.path.exists(p):
+                logger.info(f"[VideoPathResolver] Using upstream joined video: {p}")
+                return (p,)
+
+        # 3. Check latest export from project_name bin
+        import folder_paths
+        output_dir = folder_paths.get_output_directory()
+        bins_project_dir = os.path.join(output_dir, "minimax_h3_bins", project_name.strip())
+        if os.path.exists(bins_project_dir):
+            exports = []
+            for item in os.listdir(bins_project_dir):
+                if item.startswith("export_"):
+                    v = os.path.join(bins_project_dir, item, "selected_video.mp4")
+                    if os.path.exists(v):
+                        exports.append((os.path.getmtime(v), v))
+            if exports:
+                exports.sort(key=lambda x: x[0], reverse=True)
+                resolved = exports[0][1]
+                logger.info(f"[VideoPathResolver] Auto-resolved latest project export for '{project_name}': {resolved}")
+                return (resolved,)
+
+        # 4. Check latest combined in output/H3_Easy_v5/
+        easy_dir = os.path.join(output_dir, "H3_Easy_v5")
+        if os.path.exists(easy_dir):
+            combined_candidates = []
+            for f in os.listdir(easy_dir):
+                if f.endswith(".mp4") and ("Combined" in f or "selected" in f or "01_" in f):
+                    fp = os.path.join(easy_dir, f)
+                    combined_candidates.append((os.path.getmtime(fp), fp))
+            if combined_candidates:
+                combined_candidates.sort(key=lambda x: x[0], reverse=True)
+                resolved = combined_candidates[0][1]
+                logger.info(f"[VideoPathResolver] Auto-resolved latest combined video in H3_Easy_v5: {resolved}")
+                return (resolved,)
+
+        # 5. Fallback path
+        if fallback_path and os.path.exists(fallback_path.strip()):
+            return (fallback_path.strip(),)
+
+        raise ValueError(f"[MiniMaxVideoPathResolver] No valid video found for project '{project_name}'! Please run Stage 2 first or provide a valid fallback_path.")
+
+
+class MiniMaxImageUpscaleBatchedNode:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "upscale_model": ("UPSCALE_MODEL",),
+                "images": ("IMAGE",),
+                "per_batch": ("INT", {"default": 16, "min": 1, "max": 4096, "step": 1}),
+            },
+            "optional": {
+                "downscale_ratio": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "downscale_method": (["nearest-exact", "bilinear", "area", "bicubic", "lanczos"], {"default": "lanczos"}),
+                "precision": (["float32", "float16", "bfloat16"], {"default": "float16"}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "upscale"
+    CATEGORY = "MiniMaxH3/Enhancement"
+    DESCRIPTION = "Memory-safe batch model upscaling with native float16 and automatic disk memmap for long videos (>4GB) to prevent RAM OOM."
+
+    def upscale(self, upscale_model, images, per_batch, downscale_ratio=1.0, downscale_method="lanczos", precision="float16"):
+        import numpy as np
+        import folder_paths
+        import uuid
+        from comfy import model_management
+        from comfy.utils import ProgressBar, common_upscale
+
+        dtype = torch.float16 if precision == "float16" else torch.bfloat16 if precision == "bfloat16" else torch.float32
+        device = model_management.get_torch_device()
+        upscale_model.to(device, dtype=dtype)
+
+        steps = images.shape[0]
+        if steps == 0:
+            return (images,)
+
+        pbar = ProgressBar(steps)
+        out_tensor = None
+
+        for start_idx in range(0, steps, per_batch):
+            batch_slice = images[start_idx:start_idx+per_batch].movedim(-1, -3).to(device=device, dtype=dtype)
+            sub_images = upscale_model(batch_slice)
+            if downscale_ratio < 1.0:
+                new_height = int(sub_images.shape[2] * downscale_ratio)
+                new_width = int(sub_images.shape[3] * downscale_ratio)
+                if sub_images.dtype == torch.bfloat16:
+                    sub_images = sub_images.to(torch.float32)
+                sub_images = common_upscale(sub_images, new_width, new_height, downscale_method, "disabled")
+
+            sub_images = sub_images.movedim(1, -1).to(device="cpu", dtype=torch.float16)
+
+            if out_tensor is None:
+                total_bytes = steps * sub_images.shape[1] * sub_images.shape[2] * sub_images.shape[3] * 2
+                if total_bytes > 4 * 1024 * 1024 * 1024:  # > 4 GB: use disk memory-mapped tensor to prevent RAM OOM
+                    temp_dir = folder_paths.get_temp_directory()
+                    os.makedirs(temp_dir, exist_ok=True)
+                    mmap_file = os.path.join(temp_dir, f"upscale_mmap_{uuid.uuid4().hex}.bin")
+                    mmap_arr = np.memmap(mmap_file, dtype='float16', mode='w+', shape=(steps, sub_images.shape[1], sub_images.shape[2], sub_images.shape[3]))
+                    out_tensor = torch.from_numpy(mmap_arr)
+                    out_tensor._mmap_file = mmap_file
+                else:
+                    out_tensor = torch.empty((steps, sub_images.shape[1], sub_images.shape[2], sub_images.shape[3]), dtype=torch.float16, device="cpu")
+
+            batch_count = sub_images.shape[0]
+            out_tensor[start_idx:start_idx+batch_count] = sub_images
+            pbar.update(batch_count)
+
+        upscale_model.cpu()
+        return (out_tensor,)
+
+
 NODE_CLASS_MAPPINGS = {
+    "MiniMaxImageUpscaleBatched": MiniMaxImageUpscaleBatchedNode,
+    "MiniMaxVideoPathResolver": MiniMaxVideoPathResolverNode,
+    "MiniMaxSelectedClipExport": MiniMaxSelectedClipExportNode,
+    "MiniMaxEasyVideoSettings": MiniMaxEasyVideoSettingsNode,
+    "MiniMaxVideoFrameRate": MiniMaxVideoFrameRateNode,
     "MiniMaxDiskVideoStream": MiniMaxDiskVideoStreamNode,
     "MiniMaxPrefixCacheConfig": MiniMaxPrefixCacheConfigNode,
     "MiniMaxPrefixCacheApplier": MiniMaxPrefixCacheApplierNode,
@@ -1605,22 +1888,27 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxDiskVideoStream": "MiniMax H3 Disk Video Stream",
-    "MiniMaxPrefixCacheConfig": "MiniMax H3 Continuation Config",
-    "MiniMaxPrefixCacheApplier": "MiniMax H3 Continuation Applier",
-    "MiniMaxTrimPrefix": "MiniMax H3 Trim Prefix (AV Master, Zero Flicker)",
-    "MiniMaxTrimPrefixLatent": "MiniMax H3 Trim Prefix Latent (AV Master)",
-    "MiniMaxLongVideoStitcher": "MiniMax H3 Long Video Stitcher (AV Seamless)",
-    "MiniMaxCacheMonitor": "MiniMax H3 Cache Telemetry Monitor",
-    "MiniMaxSaveLatent": "MiniMax H3 Save AV Latent (Standalone)",
-    "MiniMaxLoadLatent": "MiniMax H3 Load AV Latent (Standalone)",
-    "MiniMaxClipBinSaver": "MiniMax H3 Clip Bin Saver (Media Pool)",
-    "MiniMaxClipBinPicker": "MiniMax H3 Clip Bin Picker (Gallery Loader)",
-    "MiniMaxClipBinTreePicker": "MiniMax H3 Clip Bin Tree Picker (Lineage Graph)",
-    "MiniMaxSafeVAEDecode": "MiniMax H3 Safe VAE Decode (Video)",
-    "MiniMaxSafeVAEDecodeAudio": "MiniMax H3 Safe VAE Decode (Audio)",
-    "MiniMaxVideoChunkSlicer": "🎬 MiniMax Video Chunk Slicer (长视频智能切片器)",
-    "MiniMaxVideoPatchReassembler": "🧩 MiniMax Video Patch Reassembler (视频回填缝合器)",
+    "MiniMaxImageUpscaleBatched": "H3 2倍超解像（高速・メモリ安全版）",
+    "MiniMaxVideoPathResolver": "H3 動画パス自動解決 (Smart Path)",
+    "MiniMaxSelectedClipExport": "H3 選択した分岐だけ結合",
+    "MiniMaxEasyVideoSettings": "H3 解像度・追加秒数（自動計算）",
+    "MiniMaxVideoFrameRate": "H3 補間後のFPS・尺調整",
+    "MiniMaxDiskVideoStream": "MiniMax H3 ディスク動画ストリーム",
+    "MiniMaxPrefixCacheConfig": "MiniMax H3 継続生成設定",
+    "MiniMaxPrefixCacheApplier": "MiniMax H3 継続生成適用",
+    "MiniMaxTrimPrefix": "MiniMax H3 先頭重複フレーム削除 (AV Master)",
+    "MiniMaxTrimPrefixLatent": "MiniMax H3 先頭重複潜在削除 (AV Master)",
+    "MiniMaxLongVideoStitcher": "MiniMax H3 長尺動画シームレス結合",
+    "MiniMaxCacheMonitor": "MiniMax H3 キャッシュ監視モニター",
+    "MiniMaxSaveLatent": "MiniMax H3 潜在データ保存 (AV Latent)",
+    "MiniMaxLoadLatent": "MiniMax H3 潜在データ読込 (AV Latent)",
+    "MiniMaxClipBinSaver": "MiniMax H3 クリップ保存・プール",
+    "MiniMaxClipBinPicker": "MiniMax H3 クリップ選択・ギャラリー",
+    "MiniMaxClipBinTreePicker": "MiniMax H3 クリップ選択・系統ツリー",
+    "MiniMaxSafeVAEDecode": "MiniMax H3 安全VAEデコード (Video)",
+    "MiniMaxSafeVAEDecodeAudio": "MiniMax H3 安全VAEデコード (Audio)",
+    "MiniMaxVideoChunkSlicer": "🎬 MiniMax 動画スマート分割スライサー",
+    "MiniMaxVideoPatchReassembler": "🧩 MiniMax 動画パーツ差し替え・統合",
 }
 
 
