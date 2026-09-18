@@ -85,7 +85,7 @@ ComfyUI画面上の「Manager」ボタンをクリックし、「Install Custom 
 | :--- | :--- | :--- | :--- |
 | **H3 Diffusion Model** | `minimax_h3_fl2va_bf16.safetensors`<br>（またはint8版） | `models/diffusion_models/` | Hugging Face (Comfy-Org / MiniMax-H3) |
 | **Text Encoder** | `qwen3vl_32b_minimax_h3_bf16.safetensors`<br>（またはawq版） | `models/text_encoders/` | Hugging Face (Comfy-Org / MiniMax-H3) |
-| **動画用 VAE** | `minimax_h3_video_vae_fp16.safetensors` | `models/vae/` | Hugging Face (Comfy-Org / MiniMax-H3) |
+| **動画用 VAE** | `minimax_h3_video_vae_int8_convrot.safetensors`<br>（推奨・軽量版。またはfp16版） | `models/vae/` | [Hugging Face (Comfy-Org / MiniMax-H3)](https://huggingface.co/Comfy-Org/MiniMax-H3/blob/main/vae/minimax_h3_video_vae_int8_convrot.safetensors) |
 | **音声用 VAE** | `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/` | Hugging Face (Comfy-Org / MiniMax-H3) |
 | **超解像モデル** | `RealESRGAN_x4plus_anime_6B.pth` | `models/upscale_models/` | Hugging Face / GitHub |
 | **フレーム補間モデル** | `rife426.pth` | `models/frame_interpolation/` | ComfyUI-Frame-Interpolation等 |
